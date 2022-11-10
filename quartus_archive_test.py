@@ -3,9 +3,12 @@
 import http.client
 import logging
 import sys
+import time
 
 import lxml.html
 import mechanize
+import tenacity
+from attrs import define
 from lxml import objectify
 from lxml.html import html5parser
 from rich import print
@@ -26,34 +29,52 @@ br.set_header(
 )
 
 
-def get_dist_links() -> list[tuple[str, str, mechanize.Link]]:
+@define
+class DistInfo:
+    edition: str
+    operating_system: str
+    dl_page_url: str
+
+
+@tenacity.retry(stop=tenacity.stop_after_attempt(5), wait=tenacity.wait_exponential(min=15, max=60))
+def get_dist_link_info(dl_page_url: str) -> DistInfo:
+    print(f"opening dl link url {dl_page_url}")
+    br.open(dl_page_url)
+    url = br.geturl()
+    print(f"actual dl link url: {url}")
+    if "homepage.html?ref=" in url:
+        print(f"got a redirect to home")
+        br.back()
+        raise ValueError(f"got a redirect to home")
+    if "Pro" in br.title():
+        edition = "pro"
+    elif "Standard" in br.title():
+        edition = "standard"
+    elif "Lite" in br.title():
+        edition = "lite"
+    else:
+        print(f"unknown edition for '{br.title()}'")
+        br.back()
+        raise ValueError(f"unknown edition for '{br.title()}'")
+    if "Windows" in br.title():
+        operating_system = "windows"
+    elif "Linux" in br.title():
+        operating_system = "linux"
+    else:
+        print(f"unknown os for '{br.title()}'")
+        br.back()
+        raise ValueError(f"unknown os for '{br.title()}'")
+    br.back()
+    return DistInfo(edition=edition, operating_system=operating_system, dl_page_url=url)
+
+
+def get_dist_infos() -> list[DistInfo]:
     br.open(landing_url)
-    dist_links = []
-    dl_links = [l for l in br.links() if l.text.startswith("Download for")]
-    print(f"dl_links {dl_links}")
-    open("dump-meta.html", "wb").write(br.response().get_data())
-    for l in dl_links:
-        br.open(landing_url)
-        print(f"l: {l}")
-        print(f"l.absolute_url {l.absolute_url}")
-        br.follow_link(l)
-        open("dump.html", "wb").write(br.response().get_data())
-        if "Pro" in br.title():
-            edition = "pro"
-        elif "Standard" in br.title():
-            edition = "standard"
-        elif "Lite" in br.title():
-            edition = "lite"
-        else:
-            raise ValueError(f"unknown edition for '{br.title()}'")
-        if "Windows" in br.title():
-            os = "windows"
-        elif "Linux" in br.title():
-            os = "linux"
-        else:
-            raise ValueError(f"unknown os for '{br.title()}'")
-        dist_links.append((edition, os, l))
-    return dist_links
+    dist_infos = []
+    dl_links = [lnk.absolute_url for lnk in br.links() if lnk.text.startswith("Download for")]
+    for dl_link in dl_links:
+        dist_infos.append(get_dist_link_info(dl_link))
+    return dist_infos
 
 
 print(get_dist_links())
