@@ -41,6 +41,7 @@ class DistInfo:
 class Download:
     filename: str
     url: str
+    sha1: str
     # ident: int
     # updated_date: datetime.date
 
@@ -450,10 +451,10 @@ def xp_contains(attrib: str, val: str) -> str:
     return f"contains(concat(' ',normalize-space(@{attrib}),' '),' {val} ')"
 
 
-@tenacity.retry(**retry_kwargs)
-def get_downloads(dist: DistInfo) -> list[Download]:
+# @tenacity.retry(**retry_kwargs)
+def get_downloads(dl_page_url: str) -> list[Download]:
     dls = []
-    br.open(dist.dl_page_url)
+    br.open(dl_page_url)
     html = lxml.html.fromstring(br.response().get_data().decode("utf-8"))
     id_div = html.xpath(f"//div[{xp_contains('class', 'dc-page-banner-actions-action-id')}]")[0]
     id_span = next(e for e in id_div if e.tag == "span")
@@ -462,17 +463,26 @@ def get_downloads(dist: DistInfo) -> list[Download]:
         f"//div[{xp_contains('class', 'dc-page-banner-actions-action-updated')}]"
     )[0]
     updated_span = next(e for e in updated_div if e.tag == "span")
-    d, m, y = updated_span.txt.split("/")
+    d, m, y = map(int, updated_span.text.split("/"))
     updated_date = datetime.date(y, m, d)
-    version_outer_div = html.xpath(
-        f"//div[{xp_contains('class', 'dc-page-banner-actions-action-version')}]"
-    )[0]
-    version_div = next(e for e in version_outer_div if e.tag == "div")
+    version_select = html.xpath(f"//select[@id='version-driver-select']")[0]
+    ver_str = next(o.text for o in version_select if "selected" in o.attrib)
+    ver = version.parse(ver_str)
+    print(f"id_num: {id_num} d: {updated_date} v: {ver}")
     return dls
 
 
-print(get_dist_infos())
+def get_dist_downloads(dist: DistInfo) -> dict[Version, Download]:
+    dls = {}
+    for ver, url in dist.dl_page_urls:
+        dls[ver] = get_downloads(url)
+    return dls
 
-# win_lite = next(i for i in static_dist_infos if i.edition == "lite" and i.operating_system == "windows")
-# win_lite_dls = get_downloads(win_lite)
-# print(win_lite_dls)
+
+# print(get_dist_infos())
+
+win_lite = next(
+    i for i in static_dist_infos if i.edition == "lite" and i.operating_system == "windows"
+)
+win_lite_latest_dls = get_downloads(win_lite.dl_page_urls[1][1])
+print(win_lite_latest_dls)
