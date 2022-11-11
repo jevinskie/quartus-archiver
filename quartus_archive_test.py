@@ -36,6 +36,40 @@ class DistInfo:
     dl_page_url: str
 
 
+static_dist_infos = [
+    DistInfo(
+        edition="pro",
+        operating_system="windows",
+        dl_page_url="https://www.intel.com/content/www/us/en/software-kit/746667/intel-quartus-prime-pro-edition-design-software-version-22-3-for-windows.html",
+    ),
+    DistInfo(
+        edition="pro",
+        operating_system="linux",
+        dl_page_url="https://www.intel.com/content/www/us/en/software-kit/746666/intel-quartus-prime-pro-edition-design-software-version-22-3-for-linux.html",
+    ),
+    DistInfo(
+        edition="standard",
+        operating_system="windows",
+        dl_page_url="https://www.intel.com/content/www/us/en/software-kit/757236/intel-quartus-prime-standard-edition-design-software-version-22-1-for-windows.html",
+    ),
+    DistInfo(
+        edition="standard",
+        operating_system="linux",
+        dl_page_url="https://www.intel.com/content/www/us/en/software-kit/757235/intel-quartus-prime-standard-edition-design-software-version-22-1-for-linux.html",
+    ),
+    DistInfo(
+        edition="lite",
+        operating_system="windows",
+        dl_page_url="https://www.intel.com/content/www/us/en/software-kit/757262/intel-quartus-prime-lite-edition-design-software-version-22-1-for-windows.html",
+    ),
+    DistInfo(
+        edition="lite",
+        operating_system="linux",
+        dl_page_url="https://www.intel.com/content/www/us/en/software-kit/757261/intel-quartus-prime-lite-edition-design-software-version-22-1-for-linux.html",
+    ),
+]
+
+
 @tenacity.retry(stop=tenacity.stop_after_attempt(5), wait=tenacity.wait_exponential(min=15, max=60))
 def get_dist_link_info(dl_page_url: str) -> DistInfo:
     print(f"opening dl link url {dl_page_url}")
@@ -77,4 +111,4 @@ def get_dist_infos() -> list[DistInfo]:
     return dist_infos
 
 
-print(get_dist_links())
+print(get_dist_infos())
