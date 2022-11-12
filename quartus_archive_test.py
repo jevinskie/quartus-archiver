@@ -510,8 +510,9 @@ def get_cdn_url(url: str) -> str:
         for c in r.cookies:
             f.cookies.set_cookie(c)
 
-    url = url.replace("getContent", "acceptEula")
-    r = session.get(url, cookies=f.cookies, allow_redirects=True)
+    url_eula = url.replace("getContent", "acceptEula")
+    session.get(url_eula, cookies=f.cookies, allow_redirects=True)
+    r = session.head(url, cookies=f.cookies, allow_redirects=True)
     print(f"url: {url} cdn url: {r.url}")
     assert "downloads.intel.com/akdlm" in r.url
     return r.url
