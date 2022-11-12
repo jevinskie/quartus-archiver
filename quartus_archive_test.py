@@ -3,15 +3,15 @@
 import datetime
 import http.client
 import logging
+import re
 import sys
 
 import lxml.html
 import mechanize
+import packaging.version
 import tenacity
 from attrs import define
 from lxml import etree
-from packaging import version
-from packaging.version import Version
 from rich import print
 
 logger = logging.getLogger("mechanize")
@@ -30,11 +30,16 @@ br.set_header(
 )
 
 
+class Version(packaging.version.Version):
+    def __repr__(self) -> str:
+        return f"Version('{self}')"
+
+
 @define
 class DistInfo:
     edition: str
     operating_system: str
-    dl_page_urls: tuple[version.Version, str]
+    dl_page_urls: tuple[Version, str]
 
 
 @define
@@ -42,8 +47,12 @@ class Download:
     filename: str
     url: str
     sha1: str
-    # ident: int
-    # updated_date: datetime.date
+    version: Version
+    ident: int
+    updated_date: datetime.date
+    listed_size: int
+    operating_system: str
+    edition: str
 
 
 static_dist_infos = [
@@ -432,7 +441,7 @@ def get_dist_link_info(dl_page_url: str, recurse=True) -> list[DistInfo]:
     ver_urls = []
     for ver_opt in version_select:
         ver_str = ver_opt.text.removesuffix(" (Latest)")
-        ver = version.parse(ver_str)
+        ver = Version(ver_str)
         url = "https://www.intel.com" + ver_opt.attrib["value"]
         ver_urls.append((ver, url))
     return DistInfo(edition=edition, operating_system=operating_system, dl_page_urls=ver_urls)
@@ -451,34 +460,60 @@ def xp_contains(attrib: str, val: str) -> str:
     return f"contains(concat(' ',normalize-space(@{attrib}),' '),' {val} ')"
 
 
+def byte_size(size_str: str) -> int:
+    sz, unit = size_str.split()
+    sz = float(sz)
+    unit = unit.lower()
+    if unit == "kb":
+        sz *= 1024
+    elif unit == "mb":
+        sz *= 1024 * 1024
+    elif unit == "gb":
+        sz *= 1024 * 1024 * 1024
+    return int(sz)
+
+
 # @tenacity.retry(**retry_kwargs)
 def get_downloads(dl_page_url: str) -> list[Download]:
     dls = []
     br.open(dl_page_url)
     html = lxml.html.fromstring(br.response().get_data().decode("utf-8"))
-    id_div = html.xpath(f"//div[{xp_contains('class', 'dc-page-banner-actions-action-id')}]")[0]
-    id_span = next(e for e in id_div if e.tag == "span")
-    id_num = int(id_span.text)
-    updated_div = html.xpath(
-        f"//div[{xp_contains('class', 'dc-page-banner-actions-action-updated')}]"
-    )[0]
-    updated_span = next(e for e in updated_div if e.tag == "span")
-    d, m, y = map(int, updated_span.text.split("/"))
-    updated_date = datetime.date(y, m, d)
-    version_select = html.xpath(f"//select[@id='version-driver-select']")[0]
-    ver_str = next(o.text for o in version_select if "selected" in o.attrib).removesuffix(" (Latest)")
-    ver = version.parse(ver_str)
-    print(f"id_num: {id_num} d: {updated_date} v: {ver}")
+    if "Pro" in br.title():
+        edition = "pro"
+    elif "Standard" in br.title():
+        edition = "standard"
+    elif "Lite" in br.title():
+        edition = "lite"
     dl_divs = html.xpath('//div[@class="kit-detail-detailed-package__container"]')
     for dl_div in dl_divs:
         dl_butt = dl_div.xpath(".//button[@data-direct-path or @data-href]")[0]
         dl_url = dl_butt.attrib["data-href"]
         dl_str, fname = dl_butt.text_content().split()
         assert dl_str == "Download"
-        sha1_span = dl_div.xpath(".//span[text()='sha1']")[0]
-        sha1_parent = sha1_span.getparent()
-        sha1_str = sha1_parent.text_content().split()[1]
+        details_elem = dl_div.xpath(
+            f".//li[{xp_contains('class', 'kit-detail-detailed-package__list-detail')}]"
+        )
+        details = dict(
+            map(lambda e: re.sub("\s+", " ", e.text_content()).strip().split(": "), details_elem)
+        )
+        sha1_str = details["sha1"]
         assert len(sha1_str) == 40
+        ident = int(details["ID"])
+        version = Version(details["Version"])
+        d, m, y = map(int, details["Last Updated"].split("/"))
+        updated_date = datetime.date(y, m, d)
+        if "windows" in details["OS"].lower():
+            operating_system = "windows"
+        elif "linux" in details["OS"].lower():
+            operating_system = "linux"
+        else:
+            raise ValueError(f"couldn't get os from '{details['OS']}'")
+        sz = byte_size(details["Size"])
+        dls.append(
+            Download(
+                fname, dl_url, sha1_str, version, ident, updated_date, sz, operating_system, edition
+            )
+        )
     return dls
 
 
