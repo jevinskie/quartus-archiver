@@ -466,9 +466,19 @@ def get_downloads(dl_page_url: str) -> list[Download]:
     d, m, y = map(int, updated_span.text.split("/"))
     updated_date = datetime.date(y, m, d)
     version_select = html.xpath(f"//select[@id='version-driver-select']")[0]
-    ver_str = next(o.text for o in version_select if "selected" in o.attrib)
+    ver_str = next(o.text for o in version_select if "selected" in o.attrib).removesuffix(" (Latest)")
     ver = version.parse(ver_str)
     print(f"id_num: {id_num} d: {updated_date} v: {ver}")
+    dl_divs = html.xpath('//div[@class="kit-detail-detailed-package__container"]')
+    for dl_div in dl_divs:
+        dl_butt = dl_div.xpath(".//button[@data-direct-path or @data-href]")[0]
+        dl_url = dl_butt.attrib["data-href"]
+        dl_str, fname = dl_butt.text_content().split()
+        assert dl_str == "Download"
+        sha1_span = dl_div.xpath(".//span[text()='sha1']")[0]
+        sha1_parent = sha1_span.getparent()
+        sha1_str = sha1_parent.text_content().split()[1]
+        assert len(sha1_str) == 40
     return dls
 
 
