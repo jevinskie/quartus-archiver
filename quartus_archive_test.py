@@ -3,6 +3,7 @@
 import datetime
 import http.client
 import logging
+import os
 import re
 import sys
 
@@ -412,6 +413,18 @@ retry_kwargs = {
     "wait": tenacity.wait_exponential(min=15, max=60),
 }
 
+
+def login():
+    br.open("https://signin.intel.com/")
+    br.select_form(nr=0)
+    br["UserID"] = os.environ["INTEL_USER"]
+    br["Password"] = os.environ["INTEL_PASS"]
+    br.submit()
+    assert br.geturl() == "https://www.intel.com/content/www/us/en/homepage.html"
+    html = lxml.html.fromstring(br.response().get_data().decode("utf-8"))
+    assert len(html.xpath("//span[@id='logged-in-scenario']")) == 1
+
+
 # @tenacity.retry(**retry_kwargs)
 def get_dist_link_info(dl_page_url: str, recurse=True) -> list[DistInfo]:
     print(f"opening dl link url {dl_page_url}")
@@ -536,10 +549,12 @@ def get_dist_downloads(dist: DistInfo) -> dict[Version, Download]:
     return dls
 
 
+login()
+
 # print(get_dist_infos())
 
 win_lite = next(
     i for i in static_dist_infos if i.edition == "lite" and i.operating_system == "windows"
 )
-win_lite_latest_dls = get_downloads(win_lite.dl_page_urls[1][1])
-print(win_lite_latest_dls)
+# win_lite_latest_dls = get_downloads(win_lite.dl_page_urls[1][1])
+# print(win_lite_latest_dls)
