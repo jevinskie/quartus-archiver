@@ -45,7 +45,8 @@ class DistInfo:
 @define
 class Download:
     filename: str
-    url: str
+    dist_url: str
+    cdn_url: str
     sha1: str
     version: Version
     ident: int
@@ -484,10 +485,12 @@ def get_downloads(dl_page_url: str) -> list[Download]:
         edition = "standard"
     elif "Lite" in br.title():
         edition = "lite"
-    dl_divs = html.xpath('//div[@class="kit-detail-detailed-package__container"]')
+    dl_divs = html.xpath(
+        f".//div[{xp_contains('class', 'kit-detail-detailed-package__downloads')}]"
+    )
     for dl_div in dl_divs:
         dl_butt = dl_div.xpath(".//button[@data-direct-path or @data-href]")[0]
-        dl_url = dl_butt.attrib["data-href"]
+        dist_url = dl_butt.attrib["data-href"]
         dl_str, fname = dl_butt.text_content().split()
         assert dl_str == "Download"
         details_elem = dl_div.xpath(
@@ -511,7 +514,16 @@ def get_downloads(dl_page_url: str) -> list[Download]:
         sz = byte_size(details["Size"])
         dls.append(
             Download(
-                fname, dl_url, sha1_str, version, ident, updated_date, sz, operating_system, edition
+                fname,
+                dist_url,
+                "",
+                sha1_str,
+                version,
+                ident,
+                updated_date,
+                sz,
+                operating_system,
+                edition,
             )
         )
     return dls
