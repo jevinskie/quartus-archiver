@@ -1,25 +1,18 @@
 #!/usr/bin/env python3
 
 import datetime
-import http.client
-import logging
 import os
 import re
-import sys
+import time
+from http.cookiejar import CookieJar
 
 import lxml.html
 import mechanize
 import packaging.version
+import requests
 import tenacity
 from attrs import define
-from lxml import etree
 from rich import print
-
-logger = logging.getLogger("mechanize")
-logger.addHandler(logging.StreamHandler(sys.stdout))
-logger.setLevel(logging.DEBUG)
-
-http.client.HTTPConnection.debuglevel = 5
 
 landing_url = "https://www.intel.com/content/www/us/en/products/details/fpga/development-tools/quartus-prime/resource.html"
 
@@ -29,6 +22,21 @@ br.set_header(
     "User-Agent",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
 )
+proxies = {"http": "http://localhost:8888", "https": "http://localhost:8888"}
+br.set_proxies(proxies)
+br.set_ca_data("charles.pem")
+session = requests.Session()
+session.proxies = proxies
+session.verify = "charles.pem"
+
+
+def static_vars(**kwargs):
+    def decorate(func):
+        for k in kwargs:
+            setattr(func, k, kwargs[k])
+        return func
+
+    return decorate
 
 
 class Version(packaging.version.Version):
@@ -487,6 +495,28 @@ def byte_size(size_str: str) -> int:
     return int(sz)
 
 
+@static_vars(cookies=None)
+def get_cdn_url(url: str) -> str:
+    f = get_cdn_url
+    if f.cookies is None:
+        expired = True
+    else:
+        expired = False
+        for c in f.cookies:
+            expired |= c.is_expired(time.time() - 60)
+    if expired:
+        r = session.head(url, allow_redirects=True)
+        f.cookies = CookieJar()
+        for c in r.cookies:
+            f.cookies.set_cookie(c)
+
+    url = url.replace("getContent", "acceptEula")
+    r = session.get(url, cookies=f.cookies, allow_redirects=True)
+    print(f"url: {url} cdn url: {r.url}")
+    assert "downloads.intel.com/akdlm" in r.url
+    return r.url
+
+
 # @tenacity.retry(**retry_kwargs)
 def get_downloads(dl_page_url: str) -> list[Download]:
     dls = []
@@ -525,11 +555,12 @@ def get_downloads(dl_page_url: str) -> list[Download]:
         else:
             raise ValueError(f"couldn't get os from '{details['OS']}'")
         sz = byte_size(details["Size"])
+        cdn_url = get_cdn_url(dist_url)
         dls.append(
             Download(
                 fname,
                 dist_url,
-                "",
+                cdn_url,
                 sha1_str,
                 version,
                 ident,
@@ -556,5 +587,5 @@ login()
 win_lite = next(
     i for i in static_dist_infos if i.edition == "lite" and i.operating_system == "windows"
 )
-# win_lite_latest_dls = get_downloads(win_lite.dl_page_urls[1][1])
-# print(win_lite_latest_dls)
+win_lite_latest_dls = get_downloads(win_lite.dl_page_urls[1][1])
+print(win_lite_latest_dls)
