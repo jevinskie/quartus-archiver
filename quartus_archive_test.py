@@ -22,6 +22,12 @@ from rich import print
 
 landing_url = "https://www.intel.com/content/www/us/en/products/details/fpga/development-tools/quartus-prime/resource.html"
 
+mechanize._urllib2_fork.HTTPRedirectHandler.max_redirections = 10
+logger = logging.getLogger("mechanize")
+logger.addHandler(logging.StreamHandler(sys.stdout))
+logger.setLevel(logging.DEBUG)
+http.client.HTTPConnection.debuglevel = 5
+
 
 def static_vars(**kwargs):
     def decorate(func):
@@ -423,16 +429,13 @@ def init() -> tuple[mechanize.Browser, requests.Session]:
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
     )
     session = requests.Session()
-    # proxies = {"http": "http://localhost:8888", "https": "http://localhost:8888"}
-    # br.set_proxies(proxies)
-    # br.set_ca_data("charles.pem")
-    # session.proxies = proxies
-    # session.verify = "charles.pem"
 
-    # logger = logging.getLogger("mechanize")
-    # logger.addHandler(logging.StreamHandler(sys.stdout))
-    # logger.setLevel(logging.DEBUG)
-    # http.client.HTTPConnection.debuglevel = 5
+    proxies = {"http": "http://localhost:8888", "https": "http://localhost:8888"}
+    br.set_proxies(proxies)
+    br.set_ca_data("charles.pem")
+    session.proxies = proxies
+    session.verify = "charles.pem"
+
     return br, session
 
 
@@ -575,7 +578,7 @@ def get_download(dl: Download, session) -> Download:
 def get_downloads_no_cdn_url(dl_page_url: str, br, session) -> list[Download]:
     print(f"get_downloads: {dl_page_url}")
     dls = []
-    br.open(dl_page_url + "?")  # ? prevents infinite redirect
+    br.open(dl_page_url + "?foobar=1")  # ? prevents infinite redirect
     html = lxml.html.fromstring(br.response().get_data().decode("utf-8"))
     if "Pro" in br.title():
         edition = "pro"
@@ -613,11 +616,11 @@ def main(pool):
 
     num_dist_vers = sum(len(di.dl_page_urls) for di in dist_infos)
 
-    if False:
+    if True:
         dls_no_cdn_url = []
         for dist_info in dist_infos:
             for ver, dist_url in dist_info.dl_page_urls:
-                dls_no_cdn_url.append(get_downloads_no_cdn_url(dist_url, br, session))
+                dls_no_cdn_url += get_downloads_no_cdn_url(dist_url, br, session)
                 # pass
 
         with open("downloads_no_cdn_url.txt", "w") as f:
