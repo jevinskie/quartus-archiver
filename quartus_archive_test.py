@@ -18,6 +18,7 @@ import packaging.version
 import requests
 import tenacity
 from attrs import define
+from lxml import etree
 from rich import print
 
 landing_url = "https://www.intel.com/content/www/us/en/products/details/fpga/development-tools/quartus-prime/resource.html"
@@ -62,6 +63,8 @@ class Download:
     listed_size: int
     operating_system: str
     edition: str
+    package: str
+    tab: str
 
 
 static_dist_infos = [
@@ -555,6 +558,19 @@ def get_download_no_cdn_url(dl_div, operating_system, edition) -> Download:
     m, d, y = map(int, details["Last Updated"].split("/"))
     updated_date = datetime.date(y, m, d)
     sz = byte_size(details["Size"].replace(",", ""))
+    overall_div = dl_div.xpath(
+        f"ancestor-or-self::div[{xp_contains('class', 'kit-detail-internals-kits')}]"
+    )[0]
+    package_div = dl_div.xpath(
+        f"ancestor-or-self::div[{xp_contains('class', 'kit-detail-internals-kits__kit')}]"
+    )[0]
+    tab_id = int(package_div.attrib["id"].split("-")[-1])
+    package_hdr = package_div.xpath(".//h3")[0]
+    package = package_hdr.text
+    tab_div = overall_div.xpath(
+        f".//div[{xp_contains('class', 'kit-detail-internals-kits__tabs')}]"
+    )[0]
+    tab = tab_div.xpath(".//button")[tab_id].text
     return Download(
         fname,
         dist_url,
@@ -566,6 +582,8 @@ def get_download_no_cdn_url(dl_div, operating_system, edition) -> Download:
         sz,
         operating_system,
         edition,
+        package,
+        tab,
     )
 
 
@@ -630,6 +648,9 @@ def main(pool):
         dls_no_cdn_url = pickle.load(open("downloads_no_cdn_url.pickle", "rb"))
     print(dls_no_cdn_url)
 
+    if True:
+        dls = pool.starmap()
+
     # dist = next(i for i in dist_infos if i.edition == "pro" and i.operating_system == "windows")
     # dls_no_cdn_url = get_downloads_no_cdn_url("https://www.intel.com/content/www/us/en/software-kit/661713/intel-quartus-prime-pro-edition-design-software-version-19-2-for-windows.html", br, session)
     # print(dls_no_cdn_url)
@@ -638,6 +659,5 @@ def main(pool):
 
 
 if __name__ == "__main__":
-    # freeze_support()
     pool = Pool(10)
     main(pool)
