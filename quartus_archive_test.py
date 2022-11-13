@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
 import datetime
+import http.client
+import logging
 import os
 import re
+import sys
 import time
 from http.cookiejar import CookieJar
 
@@ -22,12 +25,17 @@ br.set_header(
     "User-Agent",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
 )
-proxies = {"http": "http://localhost:8888", "https": "http://localhost:8888"}
-br.set_proxies(proxies)
-br.set_ca_data("charles.pem")
 session = requests.Session()
-session.proxies = proxies
-session.verify = "charles.pem"
+# proxies = {"http": "http://localhost:8888", "https": "http://localhost:8888"}
+# br.set_proxies(proxies)
+# br.set_ca_data("charles.pem")
+# session.proxies = proxies
+# session.verify = "charles.pem"
+
+# logger = logging.getLogger("mechanize")
+# logger.addHandler(logging.StreamHandler(sys.stdout))
+# logger.setLevel(logging.DEBUG)
+# http.client.HTTPConnection.debuglevel = 5
 
 
 def static_vars(**kwargs):
@@ -520,8 +528,9 @@ def get_cdn_url(url: str) -> str:
 
 # @tenacity.retry(**retry_kwargs)
 def get_downloads(dl_page_url: str) -> list[Download]:
+    print(f"get_downloads: {dl_page_url}")
     dls = []
-    br.open(dl_page_url)
+    br.open(dl_page_url + "?")  # ? prevents infinite redirect
     html = lxml.html.fromstring(br.response().get_data().decode("utf-8"))
     if "Pro" in br.title():
         edition = "pro"
@@ -547,7 +556,7 @@ def get_downloads(dl_page_url: str) -> list[Download]:
         assert len(sha1_str) == 40
         ident = int(details["ID"])
         version = Version(details["Version"])
-        d, m, y = map(int, details["Last Updated"].split("/"))
+        m, d, y = map(int, details["Last Updated"].split("/"))
         updated_date = datetime.date(y, m, d)
         if "windows" in details["OS"].lower():
             operating_system = "windows"
@@ -557,20 +566,20 @@ def get_downloads(dl_page_url: str) -> list[Download]:
             raise ValueError(f"couldn't get os from '{details['OS']}'")
         sz = byte_size(details["Size"])
         cdn_url = get_cdn_url(dist_url)
-        dls.append(
-            Download(
-                fname,
-                dist_url,
-                cdn_url,
-                sha1_str,
-                version,
-                ident,
-                updated_date,
-                sz,
-                operating_system,
-                edition,
-            )
+        dl = Download(
+            fname,
+            dist_url,
+            cdn_url,
+            sha1_str,
+            version,
+            ident,
+            updated_date,
+            sz,
+            operating_system,
+            edition,
         )
+        print(dl)
+        dls.append(dl)
     return dls
 
 
@@ -583,10 +592,37 @@ def get_dist_downloads(dist: DistInfo) -> dict[Version, Download]:
 
 login()
 
-# print(get_dist_infos())
+# dist_infos = get_dist_infos()
+dist_infos = static_dist_infos
+# print(dist_infos)
+with open("dist_infos.txt", "w") as f:
+    print(dist_infos, file=f)
 
-win_lite = next(
-    i for i in static_dist_infos if i.edition == "lite" and i.operating_system == "windows"
-)
-win_lite_latest_dls = get_downloads(win_lite.dl_page_urls[1][1])
-print(win_lite_latest_dls)
+num_dist_vers = sum(len(di.dl_page_urls) for di in dist_infos)
+
+downloads = []
+
+i = 0
+num_dl = 0
+sz = 0
+for dist_info in dist_infos:
+    for ver, dist_url in dist_info.dl_page_urls:
+        print(
+            f"{i} / {num_dist_vers}, # dls: {num_dl}, {sz / 1024.0 * 1024 * 1024:0.3f} GB: getting downloads for os: {dist_info.operating_system} edition: {dist_info.edition} version: {ver}"
+        )
+        dist_dls = get_downloads(dist_url)
+        print(dist_dls)
+        downloads += dist_dls
+        i += 1
+        sz += sum(dl.listed_size for dl in dist_dls)
+        num_dl += len(dist_dls)
+
+print(downloads)
+with open("downloads.txt", "w") as f:
+    print(downloads, file=f)
+
+# win_lite = next(
+#     i for i in dist_infos if i.edition == "pro" and i.operating_system == "linux"
+# )
+# win_lite_latest_dls = get_downloads(win_lite.dl_page_urls[1][1])
+# print(win_lite_latest_dls)
