@@ -4,6 +4,7 @@ import datetime
 import http.client
 import logging
 import os
+import pickle
 import re
 import sys
 import time
@@ -550,7 +551,7 @@ def get_download_no_cdn_url(dl_div, operating_system, edition) -> Download:
     version = Version(details["Version"])
     m, d, y = map(int, details["Last Updated"].split("/"))
     updated_date = datetime.date(y, m, d)
-    sz = byte_size(details["Size"])
+    sz = byte_size(details["Size"].replace(",", ""))
     return Download(
         fname,
         dist_url,
@@ -571,7 +572,7 @@ def get_download(dl: Download, session) -> Download:
 
 
 # @tenacity.retry(**retry_kwargs)
-def get_downloads(dl_page_url: str, br, session, pool) -> list[Download]:
+def get_downloads_no_cdn_url(dl_page_url: str, br, session) -> list[Download]:
     print(f"get_downloads: {dl_page_url}")
     dls = []
     br.open(dl_page_url + "?")  # ? prevents infinite redirect
@@ -590,12 +591,7 @@ def get_downloads(dl_page_url: str, br, session, pool) -> list[Download]:
         operating_system = "windows"
     elif "Linux" in br.title():
         operating_system = "linux"
-    dls_no_cdn_url = list(
-        map(lambda div: get_download_no_cdn_url(div, operating_system, edition), dl_divs)
-    )
-    map_args = zip(dls_no_cdn_url, [session] * len(dls_no_cdn_url))
-    dls = pool.starmap(get_download, map_args)
-    return dls
+    return list(map(lambda div: get_download_no_cdn_url(div, operating_system, edition), dl_divs))
 
 
 def get_dist_downloads(dist: DistInfo, br, session, pool) -> dict[Version, Download]:
@@ -617,30 +613,25 @@ def main(pool):
 
     num_dist_vers = sum(len(di.dl_page_urls) for di in dist_infos)
 
-    downloads = []
+    if False:
+        dls_no_cdn_url = []
+        for dist_info in dist_infos:
+            for ver, dist_url in dist_info.dl_page_urls:
+                dls_no_cdn_url.append(get_downloads_no_cdn_url(dist_url, br, session))
+                # pass
 
-    # i = 0
-    # num_dl = 0
-    # sz = 0
-    # for dist_info in dist_infos:
-    #     for ver, dist_url in dist_info.dl_page_urls:
-    #         print(
-    #             f"{i} / {num_dist_vers}, # dls: {num_dl}, {sz / (1024.0 * 1024 * 1024):0.3f} GB: getting downloads for os: {dist_info.operating_system} edition: {dist_info.edition} version: {ver}"
-    #         )
-    #         dist_dls = get_downloads(dist_url, br, session, pool)
-    #         print(dist_dls)
-    #         downloads += dist_dls
-    #         i += 1
-    #         sz += sum(dl.listed_size for dl in dist_dls)
-    #         num_dl += len(dist_dls)
+        with open("downloads_no_cdn_url.txt", "w") as f:
+            print(dls_no_cdn_url, file=f)
+        pickle.dump(dls_no_cdn_url, open("downloads_no_cdn_url.pickle", "wb"))
+    else:
+        dls_no_cdn_url = pickle.load(open("downloads_no_cdn_url.pickle", "rb"))
+    print(dls_no_cdn_url)
 
-    # print(downloads)
-    # with open("downloads.txt", "w") as f:
-    #     print(downloads, file=f)
-
-    dist = next(i for i in dist_infos if i.edition == "pro" and i.operating_system == "windows")
-    dls = get_downloads(dist.dl_page_urls[1][1], br, session, pool)
-    print(dls)
+    # dist = next(i for i in dist_infos if i.edition == "pro" and i.operating_system == "windows")
+    # dls_no_cdn_url = get_downloads_no_cdn_url("https://www.intel.com/content/www/us/en/software-kit/661713/intel-quartus-prime-pro-edition-design-software-version-19-2-for-windows.html", br, session)
+    # print(dls_no_cdn_url)
+    # with open("downloads_no_cdn_url.txt", "w") as f:
+    #     print(dls_no_cdn_url, file=f)
 
 
 if __name__ == "__main__":
