@@ -8,6 +8,8 @@ import re
 import sys
 import time
 from http.cookiejar import CookieJar
+from multiprocessing import Pool
+from typing import Optional
 
 import lxml.html
 import mechanize
@@ -18,24 +20,6 @@ from attrs import define
 from rich import print
 
 landing_url = "https://www.intel.com/content/www/us/en/products/details/fpga/development-tools/quartus-prime/resource.html"
-
-br = mechanize.Browser()
-br.set_handle_robots(False)
-br.set_header(
-    "User-Agent",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
-)
-session = requests.Session()
-# proxies = {"http": "http://localhost:8888", "https": "http://localhost:8888"}
-# br.set_proxies(proxies)
-# br.set_ca_data("charles.pem")
-# session.proxies = proxies
-# session.verify = "charles.pem"
-
-# logger = logging.getLogger("mechanize")
-# logger.addHandler(logging.StreamHandler(sys.stdout))
-# logger.setLevel(logging.DEBUG)
-# http.client.HTTPConnection.debuglevel = 5
 
 
 def static_vars(**kwargs):
@@ -63,7 +47,7 @@ class DistInfo:
 class Download:
     filename: str
     dist_url: str
-    cdn_url: str
+    cdn_url: Optional[str]
     sha1: str
     version: Version
     ident: int
@@ -430,7 +414,28 @@ retry_kwargs = {
 }
 
 
-def login():
+def init() -> tuple[mechanize.Browser, requests.Session]:
+    br = mechanize.Browser()
+    br.set_handle_robots(False)
+    br.set_header(
+        "User-Agent",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
+    )
+    session = requests.Session()
+    # proxies = {"http": "http://localhost:8888", "https": "http://localhost:8888"}
+    # br.set_proxies(proxies)
+    # br.set_ca_data("charles.pem")
+    # session.proxies = proxies
+    # session.verify = "charles.pem"
+
+    # logger = logging.getLogger("mechanize")
+    # logger.addHandler(logging.StreamHandler(sys.stdout))
+    # logger.setLevel(logging.DEBUG)
+    # http.client.HTTPConnection.debuglevel = 5
+    return br, session
+
+
+def login(br):
     br.open("https://signin.intel.com/")
     br.select_form(nr=0)
     br["UserID"] = os.environ["INTEL_USER"]
@@ -442,7 +447,7 @@ def login():
 
 
 # @tenacity.retry(**retry_kwargs)
-def get_dist_link_info(dl_page_url: str, recurse=True) -> list[DistInfo]:
+def get_dist_link_info(dl_page_url: str, br: mechanize.Browser) -> list[DistInfo]:
     print(f"opening dl link url {dl_page_url}")
     br.open(dl_page_url)
     url = br.geturl()
@@ -477,7 +482,7 @@ def get_dist_link_info(dl_page_url: str, recurse=True) -> list[DistInfo]:
     return DistInfo(edition=edition, operating_system=operating_system, dl_page_urls=ver_urls)
 
 
-def get_dist_infos() -> list[DistInfo]:
+def get_dist_infos(br) -> list[DistInfo]:
     br.open(landing_url)
     dist_infos = []
     dl_links = [lnk.absolute_url for lnk in br.links() if lnk.text.startswith("Download for")]
@@ -504,7 +509,8 @@ def byte_size(size_str: str) -> int:
 
 
 @static_vars(cookies=None)
-def get_cdn_url(url: str) -> str:
+@tenacity.retry(**retry_kwargs)
+def get_cdn_url(session, url: str) -> str:
     f = get_cdn_url
     if f.cookies is None:
         expired = True
@@ -518,6 +524,7 @@ def get_cdn_url(url: str) -> str:
         for c in r.cookies:
             f.cookies.set_cookie(c)
 
+    print(f"get_cdn_url: {url}")
     url_eula = url.replace("getContent", "acceptEula")
     session.get(url_eula, cookies=f.cookies, allow_redirects=True)
     r = session.head(url, cookies=f.cookies, allow_redirects=True)
@@ -526,8 +533,45 @@ def get_cdn_url(url: str) -> str:
     return r.url
 
 
+def get_download_no_cdn_url(dl_div, operating_system, edition) -> Download:
+    dl_butt = dl_div.xpath(".//button[@data-direct-path or @data-href]")[0]
+    dist_url = dl_butt.attrib["data-href"]
+    dl_str, fname = dl_butt.text_content().split()
+    assert dl_str == "Download"
+    details_elem = dl_div.xpath(
+        f".//li[{xp_contains('class', 'kit-detail-detailed-package__list-detail')}]"
+    )
+    details = dict(
+        map(lambda e: re.sub("\s+", " ", e.text_content()).strip().split(": "), details_elem)
+    )
+    sha1_str = details["sha1"].lower()
+    assert len(sha1_str) == 40
+    ident = int(details["ID"])
+    version = Version(details["Version"])
+    m, d, y = map(int, details["Last Updated"].split("/"))
+    updated_date = datetime.date(y, m, d)
+    sz = byte_size(details["Size"])
+    return Download(
+        fname,
+        dist_url,
+        None,
+        sha1_str,
+        version,
+        ident,
+        updated_date,
+        sz,
+        operating_system,
+        edition,
+    )
+
+
+def get_download(dl: Download, session) -> Download:
+    dl.cdn_url = get_cdn_url(session, dl.dist_url)
+    return dl
+
+
 # @tenacity.retry(**retry_kwargs)
-def get_downloads(dl_page_url: str) -> list[Download]:
+def get_downloads(dl_page_url: str, br, session, pool) -> list[Download]:
     print(f"get_downloads: {dl_page_url}")
     dls = []
     br.open(dl_page_url + "?")  # ? prevents infinite redirect
@@ -541,88 +585,65 @@ def get_downloads(dl_page_url: str) -> list[Download]:
     dl_divs = html.xpath(
         f".//div[{xp_contains('class', 'kit-detail-detailed-package__downloads')}]"
     )
-    for dl_div in dl_divs:
-        dl_butt = dl_div.xpath(".//button[@data-direct-path or @data-href]")[0]
-        dist_url = dl_butt.attrib["data-href"]
-        dl_str, fname = dl_butt.text_content().split()
-        assert dl_str == "Download"
-        details_elem = dl_div.xpath(
-            f".//li[{xp_contains('class', 'kit-detail-detailed-package__list-detail')}]"
-        )
-        details = dict(
-            map(lambda e: re.sub("\s+", " ", e.text_content()).strip().split(": "), details_elem)
-        )
-        sha1_str = details["sha1"]
-        assert len(sha1_str) == 40
-        ident = int(details["ID"])
-        version = Version(details["Version"])
-        m, d, y = map(int, details["Last Updated"].split("/"))
-        updated_date = datetime.date(y, m, d)
-        if "windows" in details["OS"].lower():
-            operating_system = "windows"
-        elif "linux" in details["OS"].lower():
-            operating_system = "linux"
-        else:
-            raise ValueError(f"couldn't get os from '{details['OS']}'")
-        sz = byte_size(details["Size"])
-        cdn_url = get_cdn_url(dist_url)
-        dl = Download(
-            fname,
-            dist_url,
-            cdn_url,
-            sha1_str,
-            version,
-            ident,
-            updated_date,
-            sz,
-            operating_system,
-            edition,
-        )
-        print(dl)
-        dls.append(dl)
+    # mpfr windows pro 22.2 doesn't list OS
+    if "Windows" in br.title():
+        operating_system = "windows"
+    elif "Linux" in br.title():
+        operating_system = "linux"
+    dls_no_cdn_url = list(
+        map(lambda div: get_download_no_cdn_url(div, operating_system, edition), dl_divs)
+    )
+    map_args = zip(dls_no_cdn_url, [session] * len(dls_no_cdn_url))
+    dls = pool.starmap(get_download, map_args)
     return dls
 
 
-def get_dist_downloads(dist: DistInfo) -> dict[Version, Download]:
+def get_dist_downloads(dist: DistInfo, br, session, pool) -> dict[Version, Download]:
     dls = {}
     for ver, url in dist.dl_page_urls:
-        dls[ver] = get_downloads(url)
+        dls[ver] = get_downloads(url, br, session, pool)
     return dls
 
 
-login()
+def main(pool):
+    br, session = init()
+    login(br)
 
-# dist_infos = get_dist_infos()
-dist_infos = static_dist_infos
-# print(dist_infos)
-with open("dist_infos.txt", "w") as f:
-    print(dist_infos, file=f)
+    # dist_infos = get_dist_infos(br)
+    dist_infos = static_dist_infos
+    # print(dist_infos)
+    with open("dist_infos.txt", "w") as f:
+        print(dist_infos, file=f)
 
-num_dist_vers = sum(len(di.dl_page_urls) for di in dist_infos)
+    num_dist_vers = sum(len(di.dl_page_urls) for di in dist_infos)
 
-downloads = []
+    downloads = []
 
-i = 0
-num_dl = 0
-sz = 0
-for dist_info in dist_infos:
-    for ver, dist_url in dist_info.dl_page_urls:
-        print(
-            f"{i} / {num_dist_vers}, # dls: {num_dl}, {sz / 1024.0 * 1024 * 1024:0.3f} GB: getting downloads for os: {dist_info.operating_system} edition: {dist_info.edition} version: {ver}"
-        )
-        dist_dls = get_downloads(dist_url)
-        print(dist_dls)
-        downloads += dist_dls
-        i += 1
-        sz += sum(dl.listed_size for dl in dist_dls)
-        num_dl += len(dist_dls)
+    # i = 0
+    # num_dl = 0
+    # sz = 0
+    # for dist_info in dist_infos:
+    #     for ver, dist_url in dist_info.dl_page_urls:
+    #         print(
+    #             f"{i} / {num_dist_vers}, # dls: {num_dl}, {sz / (1024.0 * 1024 * 1024):0.3f} GB: getting downloads for os: {dist_info.operating_system} edition: {dist_info.edition} version: {ver}"
+    #         )
+    #         dist_dls = get_downloads(dist_url, br, session, pool)
+    #         print(dist_dls)
+    #         downloads += dist_dls
+    #         i += 1
+    #         sz += sum(dl.listed_size for dl in dist_dls)
+    #         num_dl += len(dist_dls)
 
-print(downloads)
-with open("downloads.txt", "w") as f:
-    print(downloads, file=f)
+    # print(downloads)
+    # with open("downloads.txt", "w") as f:
+    #     print(downloads, file=f)
 
-# win_lite = next(
-#     i for i in dist_infos if i.edition == "pro" and i.operating_system == "linux"
-# )
-# win_lite_latest_dls = get_downloads(win_lite.dl_page_urls[1][1])
-# print(win_lite_latest_dls)
+    dist = next(i for i in dist_infos if i.edition == "pro" and i.operating_system == "windows")
+    dls = get_downloads(dist.dl_page_urls[1][1], br, session, pool)
+    print(dls)
+
+
+if __name__ == "__main__":
+    # freeze_support()
+    pool = Pool(10)
+    main(pool)
